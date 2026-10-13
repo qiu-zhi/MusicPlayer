@@ -22,6 +22,9 @@ tools/marker.txt
 # ---- 本机工作记录 ----
 .workbuddy/
 
+# ---- 本机脚本（不入库）----
+*.bat
+
 # ---- 在源码目录里直接构建时的产物 ----
 CMakeFiles/
 CMakeCache.txt
