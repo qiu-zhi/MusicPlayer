@@ -1,0 +1,35 @@
+# ---- 构建产物（5 个构建目录，约 1.62 GiB，全部可重建）----
+build/
+build-*/
+
+# ---- Qt Creator 本机配置（kit 选择、打开的编辑器，含本机绝对路径）----
+.qtcreator/
+*.user
+*.user.*
+
+# ---- 发布签名密钥  ----
+# 后续升级/上架必须沿用此密钥，请离线单独备份
+keystore/
+
+# ---- 工具产物（listdevices 每次运行会重新生成，且含本机音频设备 ID）----
+tools/devices.txt
+tools/devices.txt.readable
+tools/*.exe
+tools/out.txt
+tools/real_out.txt
+tools/marker.txt
+
+# ---- 本机工作记录 ----
+.workbuddy/
+
+# ---- 在源码目录里直接构建时的产物 ----
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.qmlc
+*.jsc
+
+# ---- 系统垃圾 ----
+Thumbs.db
+desktop.ini
+.DS_Store
