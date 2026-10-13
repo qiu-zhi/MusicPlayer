@@ -3,9 +3,8 @@
 基于 Qt 6 / QML 的本地音乐播放器。Windows 与 Android 已测试；Linux、macOS、HarmonyOS 理论上支持，尚未测试。
 
 <p align="center">
-  <img src="docs/screenshots/player.png" width="30%" alt="播放页">
-  <img src="docs/screenshots/lyrics.png" width="30%" alt="歌词页">
-  <img src="docs/screenshots/library.png" width="30%" alt="音乐库">
+  <img src="docs/screenshots/music1.gif" width="45%" alt="播放页">
+  <img src="docs/screenshots/music2.gif" width="45%" alt="歌词页">
 </p>
 
 ## 功能
