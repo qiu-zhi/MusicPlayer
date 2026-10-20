@@ -10,9 +10,10 @@
     <ReleaseDate>2026-10-20</ReleaseDate>
     <Default>true</Default>
     <ForcedInstallation>true</ForcedInstallation>
-    <!-- 安装向导里加一个勾选项：是否在卸载时删除用户配置 -->
+    <!-- 安装向导里加一个勾选项：是否在桌面创建快捷方式 -->
     <Script>installscript.qs</Script>
     <UserInterfaces>
+        <UserInterface>desktopoptionform.ui</UserInterface>
         <UserInterface>uninstalloptionform.ui</UserInterface>
     </UserInterfaces>
 </Package>
