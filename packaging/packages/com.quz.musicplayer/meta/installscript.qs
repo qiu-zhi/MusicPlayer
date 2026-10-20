@@ -11,9 +11,14 @@
 // 桌面快捷方式没有对应配置项，只能用 CreateShortcut operation 手工建 ——
 // 它会被记入卸载日志，卸载时自动删除。
 //
+// 「一台机器只装一份」：QtIFW 自带的检测只看**同一个目标目录**，换个盘符
+// （比如从 C 盘换到 D 盘）就能装出第二份。所以这里额外扫注册表卸载项，
+// 只要机器上已有一份（不管装在哪个目录），就拦住安装并告诉用户旧的那份在哪。
+//
 // 无界面安装（--confirm-command 等）时没有向导页，勾选框拿不到，改读环境变量：
 //   MUSICPLAYER_CREATE_DESKTOP  设 0/false 则不建桌面快捷方式（默认建）
 //   MUSICPLAYER_REMOVE_CONFIG   设 1/true 则卸载时连 ~/.musicplayer 一起删（默认不删）
+//   MUSICPLAYER_FORCE_INSTALL   设 1 可跳过「已安装」检查（仅调试用）
 
 function Component()
 {
@@ -23,8 +28,37 @@ function Component()
     component.loaded.connect(this, Component.prototype.addDesktopOptionCheckBox);
 }
 
+// 「安装位置」页点下一步时拦一道：机器上已有一份就别让继续
+Component.prototype.targetDirectoryPageClicked = function()
+{
+    if (installer.environmentVariable("MUSICPLAYER_FORCE_INSTALL") === "1")
+        return true;
+
+    var existing = findExistingInstall();
+    if (existing === "")
+        return true;
+
+    // 同一目录不算冲突（那种情况 IFW 自己会走更新流程）
+    if (samePath(existing, installer.value("TargetDir")))
+        return true;
+
+    QMessageBox.critical("无法安装 Music Player",
+        "检测到本机已经安装了一份 Music Player：\n\n    " + existing +
+        "\n\n一次只能安装一份。请先卸载旧版本" +
+        "\n（控制面板 → 程序和功能 → Music Player，或运行该目录下的 MusicPlayerMaintenance.exe），" +
+        "\n再重新安装。");
+    return false;   // 阻止进入下一步
+}
+
 Component.prototype.createOperations = function()
 {
+    // 无人值守安装也走这里，同样查一遍（防止脚本化安装绕过上面的页面回调）
+    if (installer.environmentVariable("MUSICPLAYER_FORCE_INSTALL") !== "1") {
+        var existing = findExistingInstall();
+        if (existing !== "" && !samePath(existing, installer.value("TargetDir")))
+            throw new Error("已安装到 " + existing + "，请先卸载旧版本");
+    }
+
     component.createOperations();
 
     if (wantCreateDesktopShortcut(component.userInterface("DesktopOptionForm"))) {
@@ -55,6 +89,45 @@ Component.prototype.addDesktopOptionCheckBox = function()
 {
     if (installer.isInstaller())
         installer.addWizardPageItem(component, "DesktopOptionForm", QInstaller.TargetDirectory);
+}
+
+// 扫注册表卸载项，找 MusicPlayerMaintenance.exe 的所在目录；没找到返回 ""
+// 匹配 UninstallString 而不是 DisplayName：不依赖系统语言，也不会被同名软件误用
+//
+// ⚠️ 这里只用 reg：QtIFW 脚本环境**没有 QFile/QDir**（试过，报
+//    ReferenceError: QFile is not defined），所以没法做纯脚本的文件探测。
+//    reg 是 Windows 自带组件，正常机器上一定在；万一被安全软件拦（执行返回非 0），
+//    这里按"没装过"放行 —— 宁可漏拦也不误拦，误拦会把用户挡在门外。
+function findExistingInstall()
+{
+    var roots = [
+        "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+    ];
+    for (var i = 0; i < roots.length; i++) {
+        var r = installer.execute("reg",
+            ["query", roots[i], "/s", "/f", "MusicPlayerMaintenance.exe", "/d"]);
+        if (r[0] !== 0) {
+            console.log("MusicPlayer: reg query 失败(rc=" + r[0] + ")，跳过单实例检测");
+            continue;
+        }
+        // 输出里形如：  UninstallString  REG_SZ  "D:\...\MusicPlayerMaintenance.exe" --start-uninstaller
+        var m = r[1].match(/UninstallString\s+REG_SZ\s+"?([^"\r\n]*?MusicPlayerMaintenance\.exe)/i);
+        if (m)
+            return m[1].replace(/"/g, "");
+    }
+    return "";
+}
+
+function samePath(a, b)
+{
+    if (!a || !b)
+        return false;
+    var norm = function(s) {
+        return String(s).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    };
+    return norm(a) === norm(b);
 }
 
 // 有向导时看勾选框；无向导（脚本化安装）看环境变量，默认创建
