@@ -6,8 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-# SafeArea 要求 Qt 6.8 起（Main.qml / OutputDeviceSheet / PlaylistPanel 都在用）
-find_package(Qt6 6.8 COMPONENTS
+# SafeArea 要求 Qt 6.9 起：本项目用的是 `SafeArea.margins` 单例形式
+# （Main.qml / OutputDeviceSheet / PlaylistPanel 都在用），它随 6.9 才提供的
+# qquicksafearea 一同引入（qquicksafearea.cpp 标注 \since 6.9）。
+# 注意与更早的「Item.SafeArea 附加属性」区分开，那不是同一个东西。
+find_package(Qt6 6.9 COMPONENTS
     Core
     Gui
     Qml

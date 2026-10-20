@@ -9,7 +9,7 @@
 
 ## 功能
 
-- 播放本地音频，支持 mp3 / flac / wav / m4a / aac / ogg / wma / ape / opus（目前只实测过 mp3）
+- 播放本地音频，支持 mp3 / flac / wav / m4a / aac / ogg / wma / ape / opus（实测过 MP3、FLAC 和 WAV）
 - 添加歌曲支持一次选择多个文件，也可递归扫描整个文件夹，重复曲目自动跳过
 - 自动加载与音频同名的 `.lrc` 歌词，支持 GBK / GB18030 编码
 - 三档播放模式：列表循环、单曲循环、随机
@@ -28,10 +28,10 @@
 
 ### 依赖
 
-- Qt 6.8 或更高版本，需要 `Core`、`Gui`、`Qml`、`Quick`、`QuickControls2`、`Multimedia`、`Core5Compat`、`Concurrent`
+- Qt 6.9 或更高版本，需要 `Core`、`Gui`、`Qml`、`Quick`、`QuickControls2`、`Multimedia`、`Core5Compat`、`Concurrent`
 - CMake 3.16 或更高版本
 
-`Core5Compat` 是必需的：`Qt5Compat.GraphicalEffects` 与歌词的 GBK 解码都依赖它。`Concurrent` 用于把文件夹扫描放到工作线程。`SafeArea`（系统栏避让）从 Qt 6.8 才提供，所以最低版本是 6.8。
+`Core5Compat` 是必需的：`Qt5Compat.GraphicalEffects` 与歌词的 GBK 解码都依赖它。`Concurrent` 用于把文件夹扫描放到工作线程。`SafeArea`（系统栏避让）本项目用的是 `SafeArea.margins` 单例形式，它随 Qt 6.9 引入（`qquicksafearea.cpp` 标注 `\since 6.9`），所以最低版本是 6.9 —— 注意它与更早提供的 `Item.SafeArea` 附加属性不是同一个东西。
 
 ### Windows
 
