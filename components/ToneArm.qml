@@ -10,10 +10,10 @@ Item {
     readonly property real pivotXRatio: 0.8552
     readonly property real pivotYRatio: 0.1417
 
-    // 素材中唱臂的自然朝向约为 133.14°，下面两个角度是相对该朝向的旋转量。
-    // 唱针沿垂直于臂身的方向移动，因此让臂身接近竖直，进场才会是从右往左横扫，
-    // 而不是自上而下落下。播放：臂身 117°（唱针落在唱片中内侧）；暂停：臂身 90°（唱针停在右侧片外）。
-    property real playAngle: -16.1
+    // 两个角度是相对素材自然朝向（约 133°）的旋转量。唱针沿垂直臂身方向移动，
+    // 臂身接近竖直时进场是「从右往左横扫」，而不是自上而下落下。
+    // -26° 经离屏渲染校准：唱针落在 0.70R，即播放区（0.41R 标签边 ～ 1.0R 外沿）的中点。
+    property real playAngle: -26
     property real restAngle: -43.1
 
     implicitWidth: 150

@@ -6,6 +6,11 @@
     android:versionName="-- %%INSERT_VERSION_NAME%% --">
     <!-- %%INSERT_PERMISSIONS -->
     <!-- %%INSERT_FEATURES -->
+
+    <!-- 原生播放（前台服务）所需权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
     <supports-screens
         android:anyDensity="true"
         android:largeScreens="true"
@@ -55,6 +60,13 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/qtprovider_paths"/>
-        </provider>
-    </application>
+          </provider>
+
+          <!-- 原生播放服务：用系统 MediaPlayer（AudioTrack + DEEP_BUFFER）播放，
+               避开 Qt/AAudio（PRIMARY，HAL 缓冲仅 21.3ms）在蓝牙上的卡顿 -->
+          <service
+              android:name="com.quz.musicplayer.PlaybackService"
+              android:foregroundServiceType="mediaPlayback"
+              android:exported="false" />
+      </application>
 </manifest>

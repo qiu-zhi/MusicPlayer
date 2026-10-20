@@ -7,7 +7,7 @@ import Qt5Compat.GraphicalEffects
 Popup {
     id: aboutPopup
     width: 340
-    // 高度写死：contentItem 里的 id 在组件作用域外不可见，不能反查 implicitHeight
+    // 高度写死：弹窗尺寸不交给内容推导，避免换文案、改字号时弹窗跟着变高变矮
     height: 272
     modal: true
     closePolicy: Popup.CloseOnPressOutside
@@ -15,15 +15,15 @@ Popup {
 
     background: Rectangle {
         radius: 16
-        color: "#FFFFFF"
-        border.color: "#E4E6E9"
+        color: Theme.surface
+        border.color: Theme.hairline
         border.width: 1
 
         layer.enabled: true
         layer.effect: DropShadow {
             radius: 24
             samples: 24
-            color: "#3317181A"
+            color: Theme.alpha(Theme.ink, 0.20)
             verticalOffset: 12
             horizontalOffset: 0
         }
@@ -52,7 +52,7 @@ Popup {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "Music Player v" + appVersion
-            color: "#17181A"
+            color: Theme.ink
             font.pixelSize: 16
             font.bold: true
         }
@@ -65,7 +65,7 @@ Popup {
             anchors.horizontalCenter: parent.horizontalCenter
             Text {
                 text: "支持 Windows（Win7 除外）、Android"
-                color: "#8A8D92"
+                color: Theme.muted
                 font.pixelSize: 12
                 lineHeight: 1.4
                 horizontalAlignment: Text.AlignLeft
@@ -75,8 +75,9 @@ Popup {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             width: 340 - 48
-            text: "Built on 2026/10/12 based on Qt 6.12 (MinGW 13.1.0, x86_64)"
-            color: "#8A8D92"
+            // buildInfo 由 C++ 注入（日期/编译器/架构在构建时探测，不是写死的字符串）
+            text: buildInfo
+            color: Theme.muted
             font.pixelSize: 12
             lineHeight: 1.4
             horizontalAlignment: Text.AlignHCenter
@@ -86,10 +87,10 @@ Popup {
         PillButton {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "知道了"
-            textColor: "#FFFFFF"
-            iconColor: "#FFFFFF"
-            bgColor: "#F3693A"
-            borderColor: "#F3693A"
+            textColor: Theme.surface
+            iconColor: Theme.surface
+            bgColor: Theme.accent
+            borderColor: Theme.accent
             onClicked: aboutPopup.close()
         }
     }

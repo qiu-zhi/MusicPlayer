@@ -7,7 +7,6 @@ Item {
     id: turntable
 
     property bool playing: false
-    property string coverSource: ""
 
     // 底座素材 700x697
     readonly property real baseAspect: 700 / 697
@@ -39,7 +38,7 @@ Item {
         layer.effect: DropShadow {
             radius: 18
             samples: 24
-            color: "#2E17181A"
+            color: Theme.alpha(Theme.ink, 0.18)
             verticalOffset: 10
             horizontalOffset: 0
         }
@@ -52,7 +51,6 @@ Item {
         x: turntable.width * turntable.wellXRatio - width / 2
         y: turntable.height * turntable.wellYRatio - height / 2
         playing: turntable.playing
-        coverSource: turntable.coverSource
     }
 
     // 顶层：唱臂枢轴落在底座右上方

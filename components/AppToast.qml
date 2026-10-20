@@ -9,7 +9,7 @@ Rectangle {
     implicitWidth: toastLabel.implicitWidth + 28
     implicitHeight: 34
     radius: 17
-    color: "#EB17181A"
+    color: Theme.alpha(Theme.ink, 0.92)
     opacity: toast.text !== "" ? 1 : 0
     visible: opacity > 0
     z: 500
@@ -20,7 +20,7 @@ Rectangle {
         id: toastLabel
         anchors.centerIn: parent
         text: toast.text
-        color: "#FFFFFF"
+        color: Theme.surface
         font.pixelSize: 12
     }
 

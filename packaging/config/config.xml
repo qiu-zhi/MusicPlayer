@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Music Player 安装器配置。
+    版本号与 project(... VERSION) 同源，改版本时两处都要动（见 CMakeLists.txt 的说明）。
+
+    TargetDir 用 @ApplicationsDir@ —— 它在 QtIFW 手册的预定义变量表里，
+    Windows 上展开为 C:\Program Files，所以安装时需要管理员授权。
+    想改成免授权安装，换成 @HomeDir@/Applications/MusicPlayer 即可。
+-->
+<Installer>
+    <Name>Music Player</Name>
+    <Version>0.1.2</Version>
+    <Title>Music Player 安装向导</Title>
+    <Publisher>quz</Publisher>
+    <StartMenuDir>Music Player</StartMenuDir>
+    <TargetDir>@ApplicationsDir@/MusicPlayer</TargetDir>
+    <InstallerApplicationIcon>musicplayer</InstallerApplicationIcon>
+    <MaintenanceToolName>MusicPlayerMaintenance</MaintenanceToolName>
+    <RunProgram>@TargetDir@/MusicPlayer.exe</RunProgram>
+    <RunProgramDescription>立即启动 Music Player</RunProgramDescription>
+    <AllowNonAsciiCharacters>true</AllowNonAsciiCharacters>
+</Installer>

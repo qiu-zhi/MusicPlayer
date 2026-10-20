@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    组件描述。目录名 com.quz.musicplayer 也是组件标识符，与安卓包名保持一致。
+    版本形如 0.1.2-1，短横线后是"同一应用版本的打包次数"，重新打包时递增。
+-->
+<Package>
+    <DisplayName>Music Player</DisplayName>
+    <Description>基于 Qt 6 / QML 的本地音乐播放器，支持 LRC 歌词与蓝牙输出设备选择。</Description>
+    <Version>0.1.2-1</Version>
+    <ReleaseDate>2026-10-15</ReleaseDate>
+    <Default>true</Default>
+    <ForcedInstallation>true</ForcedInstallation>
+    <!-- 安装向导里加一个勾选项：是否在卸载时删除用户配置 -->
+    <Script>installscript.qs</Script>
+    <UserInterfaces>
+        <UserInterface>uninstalloptionform.ui</UserInterface>
+    </UserInterfaces>
+</Package>

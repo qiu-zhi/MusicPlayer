@@ -8,7 +8,6 @@ build-*/
 *.user.*
 
 # ---- 发布签名密钥  ----
-# 后续升级/上架必须沿用此密钥，请离线单独备份
 keystore/
 
 # ---- 工具产物（listdevices 每次运行会重新生成，且含本机音频设备 ID）----
@@ -23,7 +22,10 @@ tools/marker.txt
 .workbuddy/
 
 # ---- 本机脚本（不入库）----
+# 只排本机用的脚本：构建/推送/环境准备这类，路径和口令都跟本机绑定
 *.bat
+*.cmd
+*.ps1
 
 # ---- 在源码目录里直接构建时的产物 ----
 CMakeFiles/
@@ -31,6 +33,11 @@ CMakeCache.txt
 cmake_install.cmake
 *.qmlc
 *.jsc
+
+# ---- QtIFW 打包（只入库 config/ 与 meta/ 声明，data/ 是 windeployqt 的产出）----
+packaging/packages/*/data/
+dist/
+build/deploy/
 
 # ---- 系统垃圾 ----
 Thumbs.db

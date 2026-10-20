@@ -1,29 +1,32 @@
 import QtQuick
 import Qt5Compat.GraphicalEffects
 
-// 胶囊按钮：图标 + 文字，用于音乐库工具栏与空状态
+// 胶囊按钮：文字 + 可选图标（iconSource 为空就是纯文字胶囊）。
+// 列表管理、空状态、弹窗确认都用它 —— 别再手写一套圆角矩形 + 文字。
+// 不可点时设 enabled: false（Item 自带属性，会级联到 MouseArea 并整体置灰）
 Item {
     id: pill
 
     property string iconSource: ""
     property string text: ""
-    property color textColor: "#17181A"
-    property color iconColor: "#17181A"
-    property color bgColor: "#FFFFFF"
-    property color borderColor: "#E4E6E9"
-    property bool interactive: true
+    property color textColor: Theme.ink
+    property color iconColor: Theme.ink
+    property color bgColor: Theme.surface
+    property color borderColor: Theme.hairline
+    // 水平内边距总量（左右各一半）。列表头部「一行放三个」的场景调到 18 更紧凑
+    property int hPadding: 26
 
     signal clicked()
 
-    implicitWidth: row.implicitWidth + 26
+    implicitWidth: row.implicitWidth + hPadding
     implicitHeight: 34
-    opacity: interactive ? 1 : 0.4
+    opacity: enabled ? 1 : 0.4
 
     Rectangle {
         id: bg
         anchors.fill: parent
         radius: height / 2
-        color: !pill.interactive ? pill.bgColor
+        color: !pill.enabled ? pill.bgColor
              : mouse.pressed ? Qt.darker(pill.bgColor, 1.08)
              : mouse.containsMouse ? Qt.darker(pill.bgColor, 1.04)
              : pill.bgColor
@@ -71,7 +74,6 @@ Item {
         id: mouse
         anchors.fill: parent
         hoverEnabled: true
-        enabled: pill.interactive
         cursorShape: Qt.PointingHandCursor
         onClicked: pill.clicked()
     }

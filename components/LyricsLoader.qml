@@ -9,6 +9,7 @@ Item {
     property string source: ""   // 当前音频文件 URL
     property var lines: []       // [{ timeMs, text }]，按时间升序
     property bool loaded: false
+    property string loadedFrom: ""   // 已成功加载过的 source，防止重复加载
 
     onSourceChanged: load()
 
@@ -24,8 +25,12 @@ Item {
     }
 
     function load() {
+        // 同一个源不重复加载：重复触发会让 lines/loaded 反复在 [] / false 与有效值之间跳，
+        // displayLyrics 与 currentLyricIndex 随之抖动 → 歌词界面"闪"
+        if (source === loadedFrom) return
         lines = []
         loaded = false
+        loadedFrom = ""
         if (source === "") return
 
         // 优先走原生侧：Android 上音频是 content:// 地址（媒体库的文档 ID 里
@@ -75,6 +80,8 @@ Item {
         var parsed = parse(text)
         lines = parsed
         loaded = parsed.length > 0
+        // 只有真正解析出内容才标记"已加载"，避免空歌词被反复重试
+        if (loaded) loadedFrom = source
     }
 
     // 解析标准 LRC：支持一行多时间戳、[offset:] 补偿

@@ -32,7 +32,6 @@ Item {
             width: Math.min(parent.width, 300)
             x: (parent.width - width) / 2
             playing: playerView.playing
-            coverSource: ""
         }
 
         Column {
@@ -47,7 +46,7 @@ Item {
                 Text {
                     id: titleText
                     text: playerView.title
-                    color: "#17181A"
+                    color: Theme.ink
                     font.pixelSize: 22
                     font.bold: true
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -63,7 +62,7 @@ Item {
                     visible: playerView.hasSongs
                     iconSource: playerView.liked ? playerView.iconBase + "heart-filled.svg"
                                                  : playerView.iconBase + "heart.svg"
-                    iconColor: playerView.liked ? "#F3693A" : "#8A8D92"
+                    iconColor: playerView.liked ? Theme.accent : Theme.muted
                     iconSize: 18
                     implicitWidth: 32
                     implicitHeight: 32
@@ -74,7 +73,7 @@ Item {
 
             Text {
                 text: playerView.subtitle
-                color: "#8A8D92"
+                color: Theme.muted
                 font.pixelSize: 13
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
@@ -93,7 +92,7 @@ Item {
                 anchors.centerIn: parent
                 width: Math.min(implicitWidth, parent.width)
                 text: playerView.lyricText
-                color: lyricHit.containsMouse ? "#F3693A" : "#17181A"
+                color: lyricHit.containsMouse ? Theme.accent : Theme.ink
                 font.pixelSize: 15
                 maximumLineCount: 1
                 elide: Text.ElideRight
@@ -121,10 +120,10 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 iconSource: playerView.iconBase + "plus.svg"
                 text: "去添加音乐"
-                textColor: "#FFFFFF"
-                iconColor: "#FFFFFF"
-                bgColor: "#F3693A"
-                borderColor: "#F3693A"
+                textColor: Theme.surface
+                iconColor: Theme.surface
+                bgColor: Theme.accent
+                borderColor: Theme.accent
                 onClicked: playerView.addMusicRequested()
             }
         }

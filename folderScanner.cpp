@@ -4,8 +4,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
+#include <QFutureWatcher>
 #include <QTextCodec>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QtCore/qcoreapplication_platform.h>
+
+#include <exception>
 
 #ifdef Q_OS_ANDROID
 #include <QJniEnvironment>
@@ -14,14 +18,17 @@
 
 namespace {
 
-// 与 PlaylistStore.audioExtensions 保持一致：能识别的音频后缀
+// 与 PlaylistStore.audioExtensions / AddMusicDialogs 的过滤器同源：
+// QML 侧一律通过 audioSuffixes() 取，别再各写一份
 const QStringList kAudioSuffixes = {
     QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("wav"),
     QStringLiteral("m4a"), QStringLiteral("aac"), QStringLiteral("ogg"),
     QStringLiteral("wma"), QStringLiteral("ape"), QStringLiteral("opus")
 };
 
-// 防止异常目录结构把扫描拖死：递归深度与文件总数双重上限
+// 防止异常目录结构把扫描拖死：文件总数上限两端都生效；
+// 递归深度上限只用于安卓（DocumentsContract 逐层递归），
+// 桌面走 QDirIterator::Subdirectories，没有深度限制
 constexpr int kMaxDepth = 8;
 constexpr int kMaxFiles = 5000;
 
@@ -96,9 +103,34 @@ QJniObject contentResolver()
 
 } // namespace
 
-bool FolderScanner::hasAudioExtension(const QString &name)
+void FolderScanner::scanFolderAsync(const QUrl &folder)
 {
-    return hasAudioSuffix(name);
+    auto *watcher = new QFutureWatcher<QStringList>(this);
+    connect(watcher, &QFutureWatcher<QStringList>::finished,
+            this, [this, watcher] {
+        emit scanFinished(watcher->result());
+        watcher->deleteLater();
+    });
+    // scanFolder 是 const 的、只依赖参数，可以直接丢给工作线程。
+    // 安卓上它走 ContentResolver；QtConcurrent 的工作线程由 QAndroidJniEnv
+    // 自动 attach 到 JVM，不必回主线程。
+    watcher->setFuture(QtConcurrent::run([this, folder] {
+        // 扫描会碰文件系统与 ContentResolver，异常一律就地消化：
+        // 穿透到 QFuture 会让 result() 重新抛出，等于把崩溃搬到 GUI 线程。
+        try {
+            return scanFolder(folder);
+        } catch (const std::exception &e) {
+            qWarning() << "[scan] 扫描异常:" << e.what();
+        } catch (...) {
+            qWarning() << "[scan] 扫描异常（类型未知）";
+        }
+        return QStringList();
+    }));
+}
+
+QStringList FolderScanner::audioSuffixes() const
+{
+    return kAudioSuffixes;
 }
 
 QStringList FolderScanner::scanFolder(const QUrl &folder) const
@@ -202,6 +234,146 @@ QString FolderScanner::mimeType(const QUrl &uri) const
 #endif
 }
 
+#ifdef Q_OS_ANDROID
+// 读走并清除当前挂起的 JNI 异常，返回异常类名（无异常返回空串）。
+//
+// 存在的意义：必须把「文件真的不在了」(FileNotFoundException) 与
+// 「读不到」(SecurityException：URI 读取权限失效；或 provider 不支持 openFile)
+// 区分开。前者可以清理，后者绝不能当成文件已删除。
+static QString takePendingJniExceptionName()
+{
+    QJniEnvironment env;
+    if (!env->ExceptionCheck())
+        return QString();
+
+    jthrowable throwable = env->ExceptionOccurred();
+    env->ExceptionClear();
+    if (!throwable)
+        return QString();
+
+    QString name;
+    // 走 Throwable.getClass().getName() 拿异常类名
+    jclass cls = env->GetObjectClass(throwable);
+    if (cls) {
+        jmethodID getName = env->GetMethodID(cls, "getName", "()Ljava/lang/String;");
+        if (getName && !env->ExceptionCheck()) {
+            jstring jname = static_cast<jstring>(env->CallObjectMethod(cls, getName));
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            } else if (jname) {
+                const char *utf = env->GetStringUTFChars(jname, nullptr);
+                if (utf) {
+                    name = QString::fromUtf8(utf);
+                    env->ReleaseStringUTFChars(jname, utf);
+                }
+                env->DeleteLocalRef(jname);
+            }
+        }
+        env->DeleteLocalRef(cls);
+    }
+    env->DeleteLocalRef(throwable);
+    return name;
+}
+#endif
+
+QString FolderScanner::bluetoothA2dpDeviceId() const
+{
+#ifndef Q_OS_ANDROID
+    return {};
+#else
+    // 向 AudioManager 问当前在线的 A2DP 设备 id。
+    //
+    // 为什么需要它（源码依据见 qtmultimedia/src/multimedia/android/）：
+    // ① 安卓的 defaultAudioOutput 是设备枚举的第一个（qandroidaudiodevices.cpp 里
+    //    isDefault = i == 0），顺序由系统决定，真机上取到过不可用的设备，表现为无声；
+    // ② QAudioOutput 构造、以及 setDevice() 传空设备，都会回退到这个默认值
+    //    （qaudiooutput.cpp:62 / :208），公共 API 无法把设备设成"不指定"；
+    // ③ Qt 给 A2DP 与 SCO 的 description 都是 "Bluetooth"，QML 侧分不出来，
+    //    而 SCO 是蓝牙通话通道（HFP），拿它放音乐会没有声音。
+    //
+    // 安卓选路已改由系统接管（见 PlaybackEngine.useNative），这里只保留查询能力备查。
+
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid())
+        return {};
+
+    QJniObject audioManager = context.callObjectMethod(
+            "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;",
+            QJniObject::fromString(QStringLiteral("audio")).object<jstring>());
+    if (!audioManager.isValid()) {
+        QJniEnvironment().checkAndClearExceptions();
+        return {};
+    }
+
+    const jint getOutputs = QJniObject::getStaticField<jint>(
+            "android/media/AudioManager", "GET_DEVICES_OUTPUTS");
+    QJniObject devices = audioManager.callObjectMethod(
+            "getDevices", "(I)[Landroid/media/AudioDeviceInfo;", getOutputs);
+    if (!devices.isValid()) {
+        QJniEnvironment().checkAndClearExceptions();
+        return {};
+    }
+
+    const jint a2dpType = QJniObject::getStaticField<jint>(
+            "android/media/AudioDeviceInfo", "TYPE_BLUETOOTH_A2DP");
+
+    QJniEnvironment env;
+    jobjectArray array = devices.object<jobjectArray>();
+    if (!array)
+        return {};
+
+    QString result;
+    const jsize count = env->GetArrayLength(array);
+    for (jsize i = 0; i < count; ++i) {
+        // GetObjectArrayElement / GetObjectClass 返回的都是**局部引用**，
+        // 循环里必须逐个 DeleteLocalRef，否则局部引用表溢出会直接崩
+        // （本项目之前在 JNI 引用上栽过 SIGSEGV）
+        jobject element = env->GetObjectArrayElement(array, i);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            continue;
+        }
+        if (!element)
+            continue;
+
+        jclass cls = env->GetObjectClass(element);
+        jmethodID typeId = cls ? env->GetMethodID(cls, "getType", "()I") : nullptr;
+        jmethodID idId = cls ? env->GetMethodID(cls, "getId", "()I") : nullptr;
+        if (cls)
+            env->DeleteLocalRef(cls);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            env->DeleteLocalRef(element);
+            continue;
+        }
+
+        bool isA2dp = false;
+        if (typeId) {
+            const jint type = env->CallIntMethod(element, typeId);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            } else {
+                isA2dp = (type == a2dpType);
+            }
+        }
+
+        if (isA2dp && idId) {
+            const jint id = env->CallIntMethod(element, idId);
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            else
+                result = QString::number(id);
+        }
+
+        env->DeleteLocalRef(element);
+        if (!result.isEmpty())
+            break;                       // 找到第一个 A2DP 就够
+    }
+
+    return result;
+#endif
+}
+
 bool FolderScanner::fileExists(const QUrl &url) const
 {
     const QString urlString = url.toString();
@@ -226,18 +398,29 @@ bool FolderScanner::fileExists(const QUrl &url) const
         const bool opened = fd.isValid();
         if (opened)
             fd.callMethod<void>("close", "()V");
-        // 文件被删时 provider 会抛 FileNotFoundException：必须把异常清掉，
-        // 否则后续所有 JNI 调用都会被这个 pending 异常带崩
-        QJniEnvironment().checkAndClearExceptions();
+        // 必须立刻读走并清掉异常：一是为了判断失败原因，二是挂起的异常会带崩后续 JNI 调用
+        const QString openError = takePendingJniExceptionName();
         if (opened)
             return true;
 
-        // 2) 少数 provider 不支持 openFile，退一步问 MIME：拿得到类型说明条目还在
+        // 2) 有些 provider 不支持 openFile，退一步问 MIME：拿得到类型说明条目还在
         const QJniObject type = resolver.callObjectMethod(
             "getType", "(Landroid/net/Uri;)Ljava/lang/String;", docUri.object<jobject>());
         const bool hasType = type.isValid() && !type.toString().isEmpty();
-        QJniEnvironment().checkAndClearExceptions();
-        return hasType;
+        const QString typeError = takePendingJniExceptionName();
+        if (hasType)
+            return true;
+
+        // 只有 provider 明确报 FileNotFoundException 才算「文件真没了」。
+        // SecurityException（URI 读取权限失效）之类都只是「查不出来」，
+        // 早先一律返回 false，结果是把好好的歌当失效曲目删掉 ——
+        // 用户看到的就是「播放时提示歌曲不存在」。这里改成保守放行。
+        const bool gone = openError.endsWith(QLatin1String("FileNotFoundException"));
+        qWarning() << "[fileExists]" << (gone ? "确认不存在，可清理:" : "无法确认，按存在处理:")
+                   << urlString
+                   << "| open:" << (openError.isEmpty() ? QStringLiteral("无异常") : openError)
+                   << "| type:" << (typeError.isEmpty() ? QStringLiteral("无异常") : typeError);
+        return !gone;
     }
 #endif
 

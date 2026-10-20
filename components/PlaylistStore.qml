@@ -1,40 +1,38 @@
 import QtQuick
 import QtMultimedia
-import QtCore
+import "../js/Format.js" as Format
 
 // 播放列表数据源：负责歌曲增删、音频元数据探测，以及本地持久化
-// 角色：file / title / artist / album / durationMs / durationText / liked / probed / checked
+// 角色：file / title / artist / album / durationMs / durationText / liked / probed / format
 Item {
     id: store
     width: 0
     height: 0
 
-    // 任意数据（含元数据、喜欢状态）变化时自增，供外部绑定刷新
+    // 任意数据（含元数据、喜欢状态、增删）变化时自增，供外部绑定刷新
     property int revision: 0
-    // 勾选状态变化时自增（与 revision 分离，避免每次勾选都重算当前歌曲）
-    property int checkedRevision: 0
+    // 只在「喜欢列表的内容」真的变了时自增。
+    // 单独一个计数器是因为探测元数据也会频繁 revision++，若挂在一起，
+    // 导入 100 首会重建 100 次喜欢列表（O(N²)），还会把列表滚动位置重置掉
+    property int likedRevision: 0
 
     readonly property int count: songsModel.count
     readonly property var model: songsModel
     // 「我喜欢的音乐」，内容与主列表保持一致
     readonly property var likedSongs: likedModel
-    readonly property int checkedCount: {
-        checkedRevision
-        return countChecked()
-    }
 
     // 结构变化（增 / 删）后发出，外部据此重新同步当前索引
     signal songsChanged()
 
-    // 数据一变就重建喜欢列表，保证两个视图的内容与顺序始终一致
-    onRevisionChanged: store.syncLikedModel()
+    // 喜欢列表的内容一变就重建，保证两个视图的顺序一致
+    onLikedRevisionChanged: store.syncLikedModel()
 
     // ---------- 持久化 ----------
-    Settings {
-        id: librarySettings
-        category: "library"
-        property string songsJson: "[]"
-    }
+    // 播放列表单独存成 playlist.json，**位置随平台**（见 main.cpp 的 configDirPath）：
+    //   桌面 → ~/.musicplayer/　　安卓 → 应用私有目录 files/settings/musicplayer/
+    // （安卓那份属沙箱，卸载应用时被系统一并删除）
+    // 读写走 C++ 的 PlaylistFile —— QML 能读文件但写不了
+    // 零散偏好（播放模式 / 输出设备）仍在 config.ini
 
     Timer {
         id: saveTimer
@@ -56,8 +54,8 @@ Item {
     // 队列按「文件」而不是「行号」记录：歌曲被删除后行号会整体前移，
     // 按行号探测会把 A 的标签写到 B 头上（删除歌曲后歌名/时长错乱就是这个原因）
     property var probeQueue: []      // 待探测的 file 列表
+    property int probeCursor: 0      // 下一个要探测的下标（不 shift，避免 O(N²) 搬移）
     property string probeFile: ""    // 当前正在探测的文件，空串表示空闲
-    readonly property bool probing: probeFile !== ""
 
     MediaPlayer {
         id: prober
@@ -81,14 +79,16 @@ Item {
     }
 
     // ---------- 工具函数 ----------
-    readonly property var audioExtensions: ["mp3", "flac", "wav", "m4a", "aac", "ogg", "wma", "ape", "opus"]
+    // 后缀清单由 C++ 的 FolderScanner 提供（扫描用的就是它），QML 不再各写一份。
+    // 原生侧在 main.cpp 里必然注入，所以这里不做存在性判断
+    readonly property var audioExtensions: folderScanner.audioSuffixes()
 
     function isAudioFile(url) {
         var s = "" + url
         var dot = s.lastIndexOf(".")
         if (dot >= 0 && audioExtensions.indexOf(s.substring(dot + 1).toLowerCase()) >= 0) return true
         // SAF / MediaProvider 返回的地址常常没有扩展名，向系统要 MIME 类型判断
-        if (s.indexOf("content:") === 0 && typeof folderScanner !== "undefined") {
+        if (s.indexOf("content:") === 0) {
             try {
                 return ("" + folderScanner.mimeType(url)).indexOf("audio/") === 0
             } catch (e) {
@@ -107,7 +107,7 @@ Item {
             var ext = s.substring(dot + 1).toLowerCase()
             if (audioExtensions.indexOf(ext) >= 0) return ext
         }
-        if (s.indexOf("content:") === 0 && typeof folderScanner !== "undefined") {
+        if (s.indexOf("content:") === 0) {
             try {
                 return store.formatFromMime("" + folderScanner.mimeType(url))
             } catch (e) {
@@ -171,9 +171,8 @@ Item {
         return parseName(url)
     }
 
-    // 向系统查 content:// 地址的真实显示名（Android）；其他平台/失败返回空串
+    // 向系统查 content:// 地址的真实显示名（Android）；失败返回空串
     function systemDisplayName(url) {
-        if (typeof folderScanner === "undefined") return ""
         try {
             return "" + folderScanner.displayName(url)
         } catch (e) {
@@ -193,12 +192,9 @@ Item {
         return false
     }
 
+    // 列表里的时长显示（未知显示 --:--；播放器那套显示 0:00）
     function formatMs(ms) {
-        if (!ms || ms <= 0) return "--:--"
-        var total = Math.floor(ms / 1000)
-        var m = Math.floor(total / 60)
-        var s = total % 60
-        return m + ":" + (s < 10 ? "0" + s : "" + s)
+        return Format.formatMs(ms, "--:--")
     }
 
     function pick(primary, fallback) {
@@ -268,14 +264,6 @@ Item {
         }
     }
 
-    function countChecked() {
-        var n = 0
-        for (var i = 0; i < songsModel.count; ++i) {
-            if (songsModel.get(i).checked) n++
-        }
-        return n
-    }
-
     // ---------- 增删改 ----------
     // 批量导入：trusted = true 时跳过后缀校验（文件夹扫描已按 MIME 过滤、
     // 单选文件选择器已限定音频类型，SAF 返回的地址可能不带扩展名）
@@ -284,8 +272,8 @@ Item {
         if (!urls || urls.length === 0) return report
         // 先用快照建索引：逐首线性查重会把批量导入拖成 O(N²)，文件一多就卡
         var existing = {}
-        for (var i = 0; i < songsModel.count; ++i)
-            existing[songsModel.get(i).file] = true
+        for (var j = 0; j < songsModel.count; ++j)
+            existing[songsModel.get(j).file] = true
 
         var added = []
         for (var i = 0; i < urls.length; ++i) {
@@ -312,8 +300,7 @@ Item {
                     durationMs: 0,
                     durationText: "--:--",
                     liked: false,
-                    probed: false,
-                    checked: false
+                    probed: false
                 })
                 existing[url] = true
                 added.push(url)
@@ -335,7 +322,6 @@ Item {
                      "重复", report.duplicate, "非音频", report.invalid, "失败", report.failed,
                      "| 曲库共", songsModel.count)
         store.revision++
-        store.checkedRevision++
         store.songsChanged()
         store.enqueueProbe(added)
         // 结构变化立即落盘：删除/新增后若只等防抖保存，进程被kill就会丢状态
@@ -359,35 +345,56 @@ Item {
             durationMs: 0,
             durationText: "--:--",
             liked: false,
-            probed: false,
-            checked: false
+            probed: false
         })
         var index = songsModel.count - 1
         store.revision++
-        store.checkedRevision++
         store.songsChanged()
         store.enqueueProbe([url])
         store.save()
         return index
     }
 
-    // 批量删除所有勾选项，返回删除数量
-    function removeChecked() {
+    // 从曲库「移出」若干文件（只在列表层面移除，绝不碰磁盘上的文件）。
+    // 用于播放列表在「全部」视图下的删除。返回实际移出的数量
+    function removeFiles(files) {
+        if (!files || files.length === 0) return 0
         var removed = 0
-        for (var i = songsModel.count - 1; i >= 0; --i) {
-            if (songsModel.get(i).checked) {
-                songsModel.remove(i)
-                removed++
-            }
+        for (var k = 0; k < files.length; ++k) {
+            var index = indexOfFile(files[k])
+            if (index < 0) continue
+            songsModel.remove(index)
+            removed++
         }
         if (removed === 0) return 0
-        console.warn("[removeChecked] 删除", removed, "首 | 曲库剩", songsModel.count, "首")
+        console.warn("[removeFiles] 从曲库移出", removed, "首 | 曲库剩", songsModel.count, "首")
         store.revision++
-        store.checkedRevision++
+        store.likedRevision++          // 被删的可能是喜欢的歌
         store.songsChanged()
-        // 删除同样立即落盘，保证「删除 → 再添加」闭环不依赖防抖计时器
+        // 立即落盘，保证「删除 → 再添加」闭环不依赖防抖计时器
         store.save()
         return removed
+    }
+
+    // 取消若干首歌的喜欢标记；曲目仍保留在「全部」列表。
+    // 用于播放列表在「我喜欢」视图下的删除。返回实际取消的数量
+    function unlikeFiles(files) {
+        if (!files || files.length === 0) return 0
+        var changed = 0
+        for (var k = 0; k < files.length; ++k) {
+            var index = indexOfFile(files[k])
+            if (index < 0) continue
+            if (!songsModel.get(index).liked) continue
+            songsModel.setProperty(index, "liked", false)
+            changed++
+        }
+        if (changed === 0) return 0
+        console.warn("[unlikeFiles] 取消喜欢", changed, "首")
+        // revision 供各处绑定刷新；likedRevision 触发喜欢列表重建
+        store.revision++
+        store.likedRevision++
+        store.save()
+        return changed
     }
 
     // 移除指定文件（用于清理已失效的曲目），返回是否真的删掉了
@@ -397,63 +404,56 @@ Item {
         songsModel.remove(index)
         console.warn("[removeFile] 移除失效曲目:", fileUrl, "| 曲库剩", songsModel.count, "首")
         store.revision++
-        store.checkedRevision++
+        store.likedRevision++          // 被删的可能是喜欢的歌
         store.songsChanged()
-        // 与删除勾选项同样立即落盘，避免下次启动又把失效曲目读回来
+        // 与批量移出同样立即落盘，避免下次启动又把失效曲目读回来
         store.save()
         return true
-    }
-
-    function setChecked(index, value) {
-        if (index < 0 || index >= songsModel.count) return
-        songsModel.setProperty(index, "checked", value)
-        store.checkedRevision++
-    }
-
-    function setAllChecked(value) {
-        for (var i = 0; i < songsModel.count; ++i) {
-            songsModel.setProperty(i, "checked", value)
-        }
-        store.checkedRevision++
     }
 
     function toggleLiked(index) {
         if (index < 0 || index >= songsModel.count) return
         songsModel.setProperty(index, "liked", !songsModel.get(index).liked)
         store.revision++
+        store.likedRevision++
         store.scheduleSave()
     }
 
     // ---------- 元数据探测流程 ----------
+    // 批量导入 5000 首曾要 5.7 秒、10000 首要 32 秒。根因是这里两处 O(N²)：
+    //   ① 队列查重用 indexOf（每加一首都全表扫一遍）
+    //   ② probeNext 用 slice()+shift() 取队首（每探测一首都搬移整个数组）
+    // 现在改成「哈希查重 + 游标推进」，两个循环都是 O(N)。
     function enqueueProbe(files) {
         if (!files || files.length === 0) return
-        var queue = probeQueue.slice()
-        for (var i = 0; i < files.length; ++i) {
-            var f = "" + files[i]
-            if (f !== "" && queue.indexOf(f) < 0) queue.push(f)
+        var seen = {}
+        for (var i = probeCursor; i < probeQueue.length; ++i)
+            seen["" + probeQueue[i]] = true
+        for (var j = 0; j < files.length; ++j) {
+            var f = "" + files[j]
+            if (f === "" || seen[f]) continue
+            seen[f] = true
+            probeQueue.push(f)
         }
-        probeQueue = queue
         if (probeFile === "") probeNext()
     }
 
     function probeNext() {
-        if (probeQueue.length === 0) {
-            probeFile = ""
-            prober.source = ""
-            probeWatchdog.stop()
+        // 用 while 跳过已删除的条目：递归写法在「整批都被删掉」时会爆栈
+        while (probeCursor < probeQueue.length) {
+            var next = probeQueue[probeCursor++]
+            if (indexOfFile(next) < 0)
+                continue
+            probeFile = next
+            prober.source = next
+            probeWatchdog.restart()
             return
         }
-        var queue = probeQueue.slice()
-        var next = queue.shift()
-        probeQueue = queue
-        if (indexOfFile(next) < 0) {
-            // 文件已被删除，跳过
-            probeNext()
-            return
-        }
-        probeFile = next
-        prober.source = next
-        probeWatchdog.restart()
+        probeFile = ""
+        prober.source = ""
+        probeWatchdog.stop()
+        probeQueue = []
+        probeCursor = 0
     }
 
     function applyProbe() {
@@ -477,6 +477,8 @@ Item {
         songsModel.setProperty(index, "durationText", formatMs(prober.duration))
         songsModel.setProperty(index, "probed", true)
         store.revision++
+        // 喜欢列表是主列表的副本：这首歌在里面时，元数据变了要跟着重建
+        if (songsModel.get(index).liked) store.likedRevision++
         store.scheduleSave()
         probeNext()
     }
@@ -518,13 +520,14 @@ Item {
                 probed: r.probed
             })
         }
-        librarySettings.songsJson = JSON.stringify(arr)
+        playlistFile.write(JSON.stringify(arr))
     }
 
     function load() {
         var arr = []
         try {
-            arr = JSON.parse(librarySettings.songsJson)
+            // 文件不存在时 read() 返回空串，JSON.parse 会抛异常，按空列表处理
+            arr = JSON.parse(playlistFile.read())
         } catch (e) {
             arr = []
         }
@@ -549,12 +552,11 @@ Item {
                 durationMs: s.durationMs || 0,
                 durationText: s.durationText || "--:--",
                 liked: s.liked === true,
-                probed: s.probed === true,
-                checked: false
+                probed: s.probed === true
             })
         }
         store.revision++
-        store.checkedRevision++
+        store.likedRevision++          // 整表重建，喜欢列表也要跟着初始化
         store.songsChanged()
 
         // 上次没探到元数据的，本次启动重试一遍

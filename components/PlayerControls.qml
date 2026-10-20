@@ -13,6 +13,12 @@ Item {
     property string totalTime: "4:35"
     property int playMode: 0 // 0: 列表循环, 1: 单曲循环, 2: 随机播放
 
+    // 曲库正在重建（扫描文件夹 / 批量导入）。这期间上一首、下一首不可用：
+    // 曲库模型正在清空重填，此时按索引取歌会取到错的东西。
+    // 与其让按钮点了没反应，不如置灰并把"现在在干什么"说出来。
+    property bool busy: false
+    property string statusText: ""
+
     // 拖动进度条时用手柄自身位置驱动显示，松手后等真实进度追上再交还控制权；
     // 否则播放进度回传会和拖动位置互相拉扯，手柄就会抖
     property bool scrubbing: false
@@ -29,17 +35,19 @@ Item {
     signal seekTo(real value)
     signal playModeCycled()
     signal playlistToggled()
+    // 置灰状态下点了切歌按钮。上层据此给一句反馈，别让用户对着死按钮猜
+    signal switchBlocked()
 
     // 图标路径前缀
     readonly property string iconBase: "../assets/icons/"
 
     // 配色取自唱机素材：近黑主文字 + 金属灰次要 + 番茄橙标签
-    readonly property color ink: "#17181A"
-    readonly property color muted: "#8A8D92"
-    readonly property color accent: "#F3693A"
-    readonly property color trackColor: "#D8DADD"
-    readonly property color surface: "#FFFFFF"
-    readonly property color hairline: "#E4E6E9"
+    readonly property color ink: Theme.ink
+    readonly property color muted: Theme.muted
+    readonly property color accent: Theme.accent
+    readonly property color trackColor: Theme.track
+    readonly property color surface: Theme.surface
+    readonly property color hairline: Theme.hairline
 
     // ========== 进度条 ==========
     Item {
@@ -59,11 +67,12 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
         }
 
-        // 总时间
+        // 总时间。曲库忙时这个位置让给状态提示 —— 右侧本来就是给文字的，
+        // 轨道会自动给它让出宽度，不会压到进度条
         Text {
             id: totalTimeText
-            text: playerControls.totalTime
-            color: playerControls.muted
+            text: playerControls.busy ? playerControls.statusText : playerControls.totalTime
+            color: playerControls.busy ? playerControls.accent : playerControls.muted
             font.pixelSize: 11
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
@@ -96,7 +105,7 @@ Item {
                 width: 12
                 height: 12
                 radius: width / 2
-                color: "#FFFFFF"
+                color: Theme.surface
                 x: progressFill.width - width / 2
                 anchors.verticalCenter: parent.verticalCenter
                 visible: scrubArea.containsMouse || scrubArea.pressed
@@ -105,7 +114,7 @@ Item {
                 layer.effect: DropShadow {
                     radius: 4
                     samples: 8
-                    color: "#8CF3693A"
+                    color: Theme.alpha(Theme.accent, 0.55)
                     verticalOffset: 0
                     horizontalOffset: 0
                 }
@@ -169,7 +178,7 @@ Item {
             layer.effect: DropShadow {
                 radius: 12
                 samples: 16
-                color: "#1F17181A"
+                color: Theme.alpha(Theme.ink, 0.12)
                 verticalOffset: 6
                 horizontalOffset: 0
             }
@@ -201,27 +210,29 @@ Item {
             // 上一首
             IconButton {
                 id: prevBtn
+                enabled: !playerControls.busy
                 iconSource: playerControls.iconBase + "skip-back.svg"
                 iconColor: playerControls.ink
                 iconSize: 26
                 implicitWidth: 46
                 implicitHeight: 46
                 Layout.alignment: Qt.AlignVCenter
-                tooltipText: "上一首"
+                tooltipText: playerControls.busy ? playerControls.statusText : "上一首"
                 onClicked: playerControls.previousClicked()
+                onBlockedClicked: playerControls.switchBlocked()
             }
 
             // 播放/暂停（主按钮，橙色实心圆）
             IconButton {
                 id: playBtn
                 iconSource: playerControls.playing ? playerControls.iconBase + "pause.svg" : playerControls.iconBase + "play.svg"
-                iconColor: "#FFFFFF"
+                iconColor: Theme.surface
                 iconSize: 28
                 implicitWidth: 54
                 implicitHeight: 54
                 Layout.alignment: Qt.AlignVCenter
-                hoverColor: "#E85C2E"
-                pressColor: "#D55228"
+                hoverColor: Theme.accentHover
+                pressColor: Theme.accentPress
                 bgNormalColor: playerControls.accent
                 tooltipText: playerControls.playing ? "暂停" : "播放"
 
@@ -231,14 +242,16 @@ Item {
             // 下一首
             IconButton {
                 id: nextBtn
+                enabled: !playerControls.busy
                 iconSource: playerControls.iconBase + "skip-forward.svg"
                 iconColor: playerControls.ink
                 iconSize: 26
                 implicitWidth: 46
                 implicitHeight: 46
                 Layout.alignment: Qt.AlignVCenter
-                tooltipText: "下一首"
+                tooltipText: playerControls.busy ? playerControls.statusText : "下一首"
                 onClicked: playerControls.nextClicked()
+                onBlockedClicked: playerControls.switchBlocked()
             }
 
             // 播放列表

@@ -4,45 +4,56 @@ import Qt5Compat.GraphicalEffects
 
 pragma ComponentBehavior: Bound
 
-// 输出设备选择面板：从底部上滑的 Bottom Sheet
+// 输出设备选择面板：基于 Drawer（底部边缘）
+//
+// 高度固定为「安全视图 × 50%」。设备数量不固定，所以高度**不随列表变化**，
+// 超出部分由列表内部滚动承载（滚动条按需显示，让"还能滚"这件事可见）。
+//
 // 档位 = Auto（默认，蓝牙优先逻辑）+ 系统当前所有输出设备
-// 选择结果通过 deviceSelected(deviceId, mode) 回传，由 Main 写入 PlaybackEngine
-Item {
+// 选中结果通过 deviceSelected(deviceId, mode) 回传，由 Main 写入 PlaybackEngine
+Drawer {
     id: sheet
 
     // 当前档位："auto" 或 具体设备 id
     property string selectedId: "auto"
 
-    // 外部注入的设备列表快照，每项 { id, description, isDefault }
+    // 外部注入的设备列表快照，每项 { id, description, label, isDefault, isBt }
     property var devices: []
 
-    readonly property string iconBase: "../assets/icons/"
+    // 安全视图高度（窗口高度减系统栏），由外部注入
+    property real safeViewHeight: 600
+    // 底部安全区（手势条）高度，避免最后一项被挡住。
+    // 注意不能叫 bottomInset —— 那是 Popup 的 FINAL 属性（用于背景内缩）
+    property real listBottomMargin: 0
 
-    // 拖动位移：向外暴露，由 Main 叠加到面板整体 y 上
-    property real dragOffset: 0
+    readonly property string iconBase: "../assets/icons/"
+    readonly property int rowH: 54
+
+    // 固定为安全视图的一半：设备再多也不改高度，改为列表内滚动
+    height: Math.round(safeViewHeight * 0.5)
 
     signal deviceSelected(string deviceId, string mode)   // mode: "auto" | "manual"
-    signal dismissed()
 
-    readonly property int rowH: 54
-    readonly property int headerBlockH: 78          // 把手 + 标题占位
-    readonly property int maxVisibleRows: 6         // 超过则列表内部滚动
-
-    // 实际要展示的行数（Auto 一行 + 设备若干）
-    readonly property int rowCount: 1 + devices.length
-    readonly property int visibleRows: Math.min(rowCount, maxVisibleRows)
-
-    // 面板总高：头部 + 行高 × 可见行数 + 底部留白
-    readonly property int sheetHeight: headerBlockH + visibleRows * rowH + 16
-
-    // ---------- 背景 ----------
-    Rectangle {
-        anchors.fill: parent
+    // ---------- Drawer 自身配置 ----------
+    edge: Qt.BottomEdge
+    // 同 PlaylistPanel：只在关闭时保留 Drawer 自带的边缘拖拽（用于从屏幕底边划出打开），
+    // 打开后关掉。否则它会在列表还没接手手势时把竖向拖动判成「拖抽屉」，
+    // 表现就是「滑设备列表把整个抽屉一起带着滑」。
+    // 详细源码依据见 PlaylistPanel.qml 里 interactive 的注释。
+    interactive: !opened
+    modal: false      // 同 PlaylistPanel：modal 会把遮罩上的点击在窗口级吞掉
+    dim: true
+    Overlay.modeless: ModalDimmer {
+        popup: sheet
+    }
+    padding: 0
+    background: Rectangle {
+        color: Theme.surface
         radius: 16
-        color: "#FFFFFF"
-        border.color: "#E1E3E7"
+        border.color: Theme.edge
         border.width: 1
 
+        // 抽屉贴屏幕底边：补掉下方圆角
         Rectangle {
             anchors.left: parent.left
             anchors.right: parent.right
@@ -61,7 +72,7 @@ Item {
         width: 40
         height: 4
         radius: 2
-        color: "#D8DADD"
+        color: Theme.track
     }
 
     // ---------- 标题 ----------
@@ -72,12 +83,12 @@ Item {
         anchors.left: parent.left
         anchors.leftMargin: 18
         text: "选择输出设备"
-        color: "#17181A"
+        color: Theme.ink
         font.pixelSize: 14
         font.weight: Font.DemiBold
     }
 
-    // ---------- 档位列表 ----------
+    // ---------- 档位列表（内容超出时滚动） ----------
     ListView {
         id: deviceList
         anchors.top: title.bottom
@@ -87,11 +98,10 @@ Item {
         anchors.leftMargin: 8
         anchors.rightMargin: 8
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 14 + sheet.SafeArea.margins.bottom
+        anchors.bottomMargin: 14 + sheet.listBottomMargin
         clip: true
         spacing: 2
         boundsBehavior: Flickable.DragOverBounds
-        interactive: contentHeight > height
 
         model: {
             var rows = [{
@@ -126,8 +136,8 @@ Item {
             width: deviceList.width
             height: sheet.rowH
             radius: 8
-            color: rowMouse.pressed ? "#1AF3693A"
-                 : rowMouse.containsMouse ? "#0A000000"
+            color: rowMouse.pressed ? Theme.alpha(Theme.accent, 0.10)
+                 : rowMouse.containsMouse ? Theme.alpha("#000000", 0.04)
                  : "transparent"
             Behavior on color { ColorAnimation { duration: 100 } }
 
@@ -160,7 +170,7 @@ Item {
                     ColorOverlay {
                         anchors.fill: devIcon
                         source: devIcon
-                        color: devRow.selected ? "#F3693A" : "#8A8D92"
+                        color: devRow.selected ? Theme.accent : Theme.muted
                     }
                 }
 
@@ -173,7 +183,7 @@ Item {
                     Text {
                         width: parent.width
                         text: devRow.modelData.title
-                        color: devRow.selected ? "#F3693A" : "#17181A"
+                        color: devRow.selected ? Theme.accent : Theme.ink
                         font.pixelSize: 13
                         font.weight: devRow.selected ? Font.DemiBold : Font.Normal
                         maximumLineCount: 1
@@ -184,7 +194,7 @@ Item {
                         width: parent.width
                         visible: text !== ""
                         text: devRow.modelData.subtitle
-                        color: "#8A8D92"
+                        color: Theme.muted
                         font.pixelSize: 11
                         maximumLineCount: 1
                         elide: Text.ElideRight
@@ -210,7 +220,7 @@ Item {
                     ColorOverlay {
                         anchors.fill: tickIcon
                         source: tickIcon
-                        color: "#F3693A"
+                        color: Theme.accent
                     }
                 }
             }
@@ -228,34 +238,37 @@ Item {
             }
         }
 
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
+        // 设备多时能看到滚动条，明确"还能滚"
+        ScrollBar.vertical: ScrollBar {
+            policy: ScrollBar.AsNeeded
+        }
     }
 
-    // ---------- 拖动收起 ----------
+    // ---------- 顶部拖动关闭 ----------
+    // interactive 在打开时被关掉了，这里补回「下滑关闭」，
+    // 并且只覆盖把手 + 标题这一条 —— 不与下面的设备列表重叠，
+    // 所以滑列表永远不会带动抽屉，拖抽屉也永远不会误触发列表滚动
     MouseArea {
-        id: handleArea
+        id: dragArea
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: sheet.headerBlockH
+        height: title.y + title.height + 8
 
+        property real pressX: 0
         property real pressY: 0
 
         onPressed: function(mouse) {
+            pressX = mouse.x
             pressY = mouse.y
         }
 
-        onPositionChanged: function(mouse) {
-            if (!pressed) return
+        onReleased: function(mouse) {
+            var dx = mouse.x - pressX
             var dy = mouse.y - pressY
-            sheet.dragOffset = dy > 0 ? Math.min(dy, sheet.height) : 0
+            // 竖向为主且拖够了才关，避免横向划一下也把面板收掉
+            if (Math.abs(dy) <= Math.abs(dx)) return
+            if (dy > 60) sheet.close()
         }
-
-        onReleased: {
-            if (sheet.dragOffset > 60) sheet.dismissed()
-            sheet.dragOffset = 0
-        }
-
-        onCanceled: sheet.dragOffset = 0
     }
 }

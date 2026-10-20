@@ -6,7 +6,7 @@ Item {
     clip: true
 
     property int currentIndex: 0
-    property var lyrics: [] // [{time: "00:00", text: "歌词内容"}, ...]
+    property var lyrics: [] // [{ timeMs: 12000, text: "歌词内容" }, ...]
 
     signal lineClicked(int index)
 
@@ -39,9 +39,9 @@ Item {
                 anchors.centerIn: parent
                 font.pixelSize: index === lyricsView.currentIndex ? 20 : 15
                 font.weight: index === lyricsView.currentIndex ? Font.DemiBold : Font.Normal
-                color: index === lyricsView.currentIndex ? "#F3693A" :
-                       Math.abs(index - lyricsView.currentIndex) === 1 ? "#8A8D92" :
-                       "#C2C7CC"
+                color: index === lyricsView.currentIndex ? Theme.accent :
+                       Math.abs(index - lyricsView.currentIndex) === 1 ? Theme.muted :
+                       Theme.disabled
                 maximumLineCount: 1
                 elide: Text.ElideMiddle
                 width: parent.width - 40
@@ -62,7 +62,9 @@ Item {
         function scrollToCurrent() {
             if (lyricsView.currentIndex >= 0 && lyricsView.currentIndex < count) {
                 var targetY = lyricsView.currentIndex * (lyricsView.lineHeight + lyricsView.lineSpacing) - lyricsView.centerOffset + 40
-                contentY = targetY
+                // 首行 / 末行的时间贴近 0 或总时长时，目标位置会超出可滚动范围，
+                // 直接赋值会越过边界；夹回边界，由 Flickable 自己贴齐边缘
+                contentY = Math.max(0, Math.min(targetY, contentHeight - height))
             }
         }
     }
@@ -74,7 +76,7 @@ Item {
         anchors.right: parent.right
         height: 60
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#E3E6E9" }
+            GradientStop { position: 0.0; color: Theme.bg }
             GradientStop { position: 1.0; color: "transparent" }
         }
         start: Qt.point(0, 0)
@@ -89,7 +91,7 @@ Item {
         height: 60
         gradient: Gradient {
             GradientStop { position: 0.0; color: "transparent" }
-            GradientStop { position: 1.0; color: "#E3E6E9" }
+            GradientStop { position: 1.0; color: Theme.bg }
         }
         start: Qt.point(0, 0)
         end: Qt.point(0, height)

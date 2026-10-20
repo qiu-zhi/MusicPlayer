@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Qt5Compat.GraphicalEffects
 
-// 右上角下拉菜单：添加单曲 / 扫描文件夹 / 关于
+// 右上角下拉菜单：添加歌曲 / 扫描文件夹 / 关于
 // 只负责展示与收起，具体动作由外部响应信号完成
 Popup {
     id: moreMenu
@@ -26,17 +26,21 @@ Popup {
     signal outputDeviceRequested()
     signal aboutRequested()
 
+    // 是否显示「输出设备」菜单项。Windows 显示；安卓隐藏（路由交给系统，
+    // 且没有可供普通应用指定输出设备的公开 API）
+    property bool showOutputDevice: true
+
     background: Rectangle {
         radius: 12
-        color: "#FFFFFF"
-        border.color: "#E4E6E9"
+        color: Theme.surface
+        border.color: Theme.hairline
         border.width: 1
 
         layer.enabled: true
         layer.effect: DropShadow {
             radius: 16
             samples: 16
-            color: "#1F17181A"
+            color: Theme.alpha(Theme.ink, 0.12)
             verticalOffset: 6
             horizontalOffset: 0
         }
@@ -48,7 +52,7 @@ Popup {
         MenuRow {
             width: 152
             iconSource: moreMenu.iconBase + "plus.svg"
-            text: "添加单曲"
+            text: "添加歌曲"
             onClicked: {
                 moreMenu.close()
                 moreMenu.addSongRequested()
@@ -67,6 +71,9 @@ Popup {
 
         MenuRow {
             width: 152
+            // 安卓上隐藏：播放已交给系统原生播放器，路由由 AudioPolicy 自动管理；
+            // 且安卓不给普通应用"指定输出设备"的公开 API（setPreferredDeviceForStrategy 是 @SystemApi）
+            visible: moreMenu.showOutputDevice
             iconSource: moreMenu.iconBase + "speaker.svg"
             text: "输出设备"
             onClicked: {

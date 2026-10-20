@@ -20,10 +20,10 @@ Item {
         return dot >= 0 ? s.substring(dot + 1).toLowerCase() : ""
     }
 
-    // 按格式区分颜色、造型保持统一：MP3 橙 / FLAC 蓝 / WAV 绿 / M4A·AAC 紫 / 其他灰
+    // 按格式着色，造型保持统一；未列出的格式一律灰色
     readonly property color tint: {
         switch (formatIcon.ext) {
-        case "mp3": return "#F3693A"
+        case "mp3": return Theme.accent
         case "flac": return "#4A90D9"
         case "wav": return "#3FA46A"
         case "m4a":
@@ -32,7 +32,7 @@ Item {
         case "opus": return "#E67E22"
         case "wma": return "#5B7DB1"
         case "ape": return "#C0603A"
-        default: return "#8A8D92"
+        default: return Theme.muted
         }
     }
 
@@ -42,8 +42,8 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: Math.round(formatIcon.size * 0.3)
-        color: "#FFFFFF"
-        border.color: "#E4E6E9"
+        color: Theme.surface
+        border.color: Theme.hairline
         border.width: 1
     }
 

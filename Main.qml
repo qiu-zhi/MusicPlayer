@@ -3,6 +3,7 @@ import QtQuick.Window
 import QtQuick.Controls
 import QtCore
 import "components"
+import "js/PlayerActions.js" as Actions
 
 Window {
     id: root
@@ -10,67 +11,43 @@ Window {
     width: 420
     height: 720
     title: "Music Player"
-    // 配色取自唱机素材：浅灰机身 + 近黑唱片 + 橙色标签
-    color: "#E3E6E9"
+    color: Theme.bg
 
-    // 图标路径前缀（Image 的相对路径以所在组件文件为基准解析）
     readonly property string iconBase: "../assets/icons/"
 
     // ---------- 界面状态 ----------
     property int currentSongIndex: -1
     property string currentFile: ""
-    property int playMode: 0        // 0 列表循环 / 1 单曲循环 / 2 随机播放
-    property bool showPlaylist: false
+    property int playMode: 0        // 0 列表循环 / 1 单曲循环 / 2 随机
     property bool inLyricsMode: false
-    property bool inLibraryMode: false
     property int currentLyricIndex: -1
-    // 当前播放范围（点歌时所在列表的 file 序列），上一首/下一首只在这个范围内走
+    // 点歌时所在的列表，上一首/下一首只在这个范围里走
     property var playQueue: []
+    property bool scanning: false
+    readonly property string scanStatusText: "正在扫描曲库…"
 
-    // ---------- 输出设备选择 ----------
-    property bool showOutputSheet: false
-    // 输出档位："auto"（蓝牙优先）或具体设备 id（手动指定）
+    // 原生侧桥接（main.cpp 注入）。整个应用都依赖它，所有 null 判断集中在这一处
+    readonly property var fs: typeof folderScanner !== "undefined" ? folderScanner : null
+
+    // 输出设备（安卓入口已隐藏，见 MoreMenu）
     property string outputMode: "auto"
-    property string outputDeviceId: ""
-    // 设备列表快照，供选择面板展示
     property var outputDevices: []
-    property real outputSheetHideProgress: 1   // 0 停靠 / 1 收起
 
-    function setOutputSheetVisible(visible) {
-        root.showOutputSheet = visible
-        root.outputSheetHideProgress = visible ? 0 : 1
-        if (visible) root.refreshOutputDevices()
-    }
+    // 安全视图高度 = 窗口高度减系统栏，播放列表两档高度都以它为基准
+    readonly property real safeViewHeight: Math.max(1,
+            height - SafeArea.margins.top - SafeArea.margins.bottom)
 
-    Behavior on outputSheetHideProgress {
-        NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
-    }
-
-    // 从引擎拉取设备列表并同步当前档位
-    function refreshOutputDevices() {
-        root.outputDevices = engine.availableOutputDevices()
-        root.outputMode = engine.outputMode
-        root.outputDeviceId = engine.currentOutputDeviceId()
-    }
-
-    // 按设备 id 取显示名，用于切换后的提示（优先用引擎翻译过的可读名）
-    function deviceName(deviceId) {
-        for (var i = 0; i < root.outputDevices.length; ++i) {
-            if ("" + root.outputDevices[i].id === deviceId) {
-                var d = root.outputDevices[i]
-                return "" + (d.label || d.description)
-            }
-        }
-        return "指定设备"
-    }
+    // 逻辑层上下文：js/PlayerActions.js 只认这几个对象。
+    // 在 Component.onCompleted 里赋值 —— 那时所有子对象都已就绪
+    property var ctx: null
 
     // ---------- 播放偏好持久化 ----------
     Settings {
         id: appSettings
+        location: configFile
         category: "player"
         property int playMode: 0
         property string outputMode: "auto"
-        property string outputDeviceId: ""
     }
 
     // ---------- 数据 / 播放 / 歌词 ----------
@@ -81,9 +58,9 @@ Window {
     PlaybackEngine {
         id: engine
 
-        onEnded: root.handleSongEnd()
-        onProgressChanged: function(positionMs) { root.syncLyric(positionMs) }
-        onPlaybackError: function(file, message) { root.handlePlaybackError(file, message) }
+        onEnded: Actions.handleSongEnd(root.ctx)
+        onProgressChanged: function(positionMs) { Actions.syncLyric(root.ctx, positionMs) }
+        onPlaybackError: function(file, message) { Actions.handlePlaybackError(root.ctx, file, message) }
     }
 
     LyricsLoader {
@@ -92,7 +69,7 @@ Window {
 
     Connections {
         target: store
-        function onSongsChanged() { root.syncWithLibrary() }
+        function onSongsChanged() { Actions.syncWithLibrary(root.ctx) }
     }
 
     // ---------- 当前歌曲信息（跟随数据变化自动刷新） ----------
@@ -113,10 +90,11 @@ Window {
     readonly property string totalTimeText: engine.durationMs > 0
         ? engine.formatMs(engine.durationMs)
         : (currentSong ? currentSong.durationText : "0:00")
+    // 占位歌词必须是只初始化一次的常量，写在三元里会让 ListView 反复重建（界面闪）
+    readonly property var placeholderLyrics: [{ timeMs: 0, text: "♪ 暂无歌词 ♪" }]
     readonly property var displayLyrics: (lyricLoader.loaded && lyricLoader.lines.length > 0)
         ? lyricLoader.lines
-        : [{ timeMs: 0, text: "♪ 暂无歌词 ♪" }]
-    // 当前正在唱的那句，播放页直接展示
+        : placeholderLyrics
     readonly property string currentLyricText: {
         var lines = lyricLoader.lines
         var i = root.currentLyricIndex
@@ -125,274 +103,79 @@ Window {
     }
     readonly property bool hasSongs: store.count > 0
 
-    // ---------- 播放控制 ----------
-    // skipCheck：调用方已经确认过文件存在时传 true，省掉一次系统查询
-    function selectSong(index, autoplay, skipCheck) {
-        if (index < 0 || index >= store.count) return
-        var song = store.songAt(index)
-        if (!song) return
-
-        // 播放前先确认文件还在：被外部删掉的曲目直接提示并移出列表，
-        // 不能进到「界面显示在播放、实际一点声音都没有」的假播放状态
-        if (!skipCheck && root.purgeIfMissing(song.file)) return
-
-        var sameSong = (root.currentSongIndex === index) && (root.currentFile === song.file)
-        root.currentSongIndex = index
-        root.currentFile = song.file
-        root.currentLyricIndex = -1
-
-        if (lyricLoader.source !== song.file) lyricLoader.source = song.file
-
-        if (sameSong) {
-            if (autoplay) engine.replay()
-            return
-        }
-        engine.source = song.file
-        if (autoplay) engine.play()
-        else engine.stop()
-    }
-
-    // 取当前播放范围；过滤掉已被删除的曲目；当前歌曲不在队列里（如取消了喜欢）就退回全部歌曲
-    function effectiveQueue() {
-        var q = root.playQueue
-        if (q && q.length > 0 && q.indexOf(root.currentFile) >= 0) {
-            var valid = []
-            for (var i = 0; i < q.length; ++i) {
-                if (store.indexOfFile(q[i]) >= 0) valid.push(q[i])
-            }
-            if (valid.length > 0 && valid.indexOf(root.currentFile) >= 0) return valid
-        }
-        return store.allFiles()
-    }
-
-    // 从列表点歌：按点歌时所在的列表决定后续上一首/下一首的范围
-    function playFromList(file, likedView) {
-        var index = store.indexOfFile(file)
-        if (index < 0) return
-        root.playQueue = likedView ? store.likedFiles() : store.allFiles()
-        root.selectSong(index, true)
-    }
-
-    // 从其他应用「用本播放器打开」进入：收进歌单后直接播放
-    function openExternal(url) {
-        var index = store.addExternalFile(url)
-        if (index < 0) return
-        root.inLyricsMode = false
-        root.inLibraryMode = false
-        root.setPlaylistVisible(false)
-        root.playQueue = store.allFiles()
-        root.selectSong(index, true)
-    }
-
-    // 系统「打开方式」的地址经 C++ 中转到这里
-    Connections {
-        target: fileOpenRelay
-        function onFileOpenRequested(url) { root.openExternal(url) }
-    }
-
-    // ---------- 切歌 ----------
-    // 队列里可能混着已被外部删除的曲目：撞上就剔掉再往前找，
-    // 否则「下一首」会反复停在这首上无声播放
-    // dir：+1 下一首 / -1 上一首；autoplay：拿到有效曲目后是否直接播放
-    function stepQueue(dir, autoplay) {
-        if (store.count === 0) return
-        for (var attempt = 0; attempt < 64; ++attempt) {
-            var queue = root.effectiveQueue()
-            if (queue.length === 0) return
-            var cur = queue.indexOf(root.currentFile)
-            var targetFile
-            if (root.playMode === 2) {
-                // 随机播放：下一首避开当前曲目（否则「下一首」可能原地不动）
-                var pick = Math.floor(Math.random() * queue.length)
-                if (dir > 0 && queue.length > 1 && pick === cur)
-                    pick = (pick + 1) % queue.length
-                targetFile = queue[pick]
-            } else {
-                targetFile = queue[cur < 0 ? 0 : (cur + dir + queue.length) % queue.length]
-            }
-            if (root.purgeIfMissing(targetFile)) continue
-            var index = store.indexOfFile(targetFile)
-            if (index < 0) continue
-            root.selectSong(index, autoplay, true)
-            return
-        }
-    }
-
-    // 「下一首」：自动播放在调用方可控（列表循环结束时需要带 autoplay 继续）
-    function playNext(autoplay) {
-        root.stepQueue(1, autoplay !== false)
-    }
-
-    // 「上一首」：用户主动切歌，恒为播放
-    function playPrev() {
-        root.stepQueue(-1, true)
-    }
-
-    function handleSongEnd() {
-        if (store.count === 0) return
-        if (root.playMode === 1) {
-            engine.replay()
-            return
-        }
-        root.playNext(true)
-    }
-
-    function togglePlay() {
-        if (store.count === 0) {
-            root.inLibraryMode = true
-            return
-        }
-        if (root.currentSongIndex < 0) {
-            root.playQueue = store.allFiles()
-            root.selectSong(0, true)
-            return
-        }
-        // 当前曲目可能已被外部删除：先核实。失效时上面这次移除已经让
-        // syncWithLibrary 把焦点对齐到了邻近曲目，直接开播即可
-        if (root.purgeIfMissing(root.currentFile)) {
-            if (store.count > 0 && root.currentFile !== "") engine.play()
-            return
-        }
-        engine.toggle()
-    }
-
-    function syncLyric(positionMs) {
-        if (!lyricLoader.loaded) {
-            if (root.currentLyricIndex !== -1) root.currentLyricIndex = -1
-            return
-        }
-        var index = lyricLoader.indexAt(positionMs)
-        if (index !== root.currentLyricIndex) root.currentLyricIndex = index
-    }
-
-    // 音乐库增删后重新对齐当前歌曲
-    function syncWithLibrary() {
-        if (store.count === 0) {
-            engine.stop()
-            engine.source = ""
-            lyricLoader.source = ""
-            root.currentSongIndex = -1
-            root.currentFile = ""
-            root.currentLyricIndex = -1
-            root.playQueue = []
-            return
-        }
-        var index = store.indexOfFile(root.currentFile)
-        if (index >= 0) {
-            root.currentSongIndex = index
-            return
-        }
-        // 当前歌曲被删掉了，从邻近位置接上
-        var next = Math.min(Math.max(root.currentSongIndex, 0), store.count - 1)
-        root.selectSong(next, engine.playing)
-    }
+    // ---------- 播放控制（逻辑都在 js/PlayerActions.js） ----------
+    function playFromList(file, likedView) { Actions.playFromList(root.ctx, file, likedView) }
+    function openExternal(url) { Actions.openExternal(root.ctx, url) }
+    function playNext(autoplay) { Actions.playNext(root.ctx, autoplay) }
+    function playPrev() { Actions.playPrev(root.ctx) }
+    function togglePlay() { Actions.togglePlay(root.ctx) }
 
     // ---------- 全局轻提示 ----------
     function showToast(message) {
         toast.text = message
     }
 
-    // ---------- 失效曲目拦截 ----------
-    // 文件是否仍可访问：Android 走 ContentResolver 试打开，桌面走文件系统。
-    // 检查本身出错时一律按「可用」处理，不能因为探测失败就删用户的歌
-    function fileAvailable(fileUrl) {
-        if (!fileUrl) return false
-        if (typeof folderScanner === "undefined") return true
-        try {
-            return folderScanner.fileExists(fileUrl) === true
-        } catch (e) {
-            return true
-        }
-    }
-
-    // 失效就提示并从曲库移除；返回 true 表示已移除
-    function purgeIfMissing(fileUrl) {
-        if (root.fileAvailable(fileUrl)) return false
-        var title = ""
-        var index = store.indexOfFile(fileUrl)
-        if (index >= 0) {
-            var song = store.songAt(index)
-            if (song) title = song.title
-        }
-        store.removeFile(fileUrl)
-        root.showToast(title !== "" ? "「" + title + "」文件已不存在，已从列表移除"
-                                    : "文件已不存在，已从列表移除")
-        return true
-    }
-
-    // 播放中途失败（最常见是源文件被外部删除）：真没了就清出列表，否则只提示不改数据
-    function handlePlaybackError(file, message) {
-        if (!file) return
-        if (message) console.warn("[playbackError]", message, file)
-        engine.stop()
-        if (!root.purgeIfMissing(file))
-            root.showToast("这首歌无法播放")
-    }
-
-    // ---------- 播放列表面板停靠控制 ----------
-    // hideProgress：0 = 停靠 / 1 = 完全收起；位移动画只挂在这个进度值上，
-    // 窗口缩放仅改变面板高度、不碰进度值，因此不会触发错误的位置动画
-    property real playlistHideProgress: 1
-
-    function setPlaylistVisible(visible) {
-        root.showPlaylist = visible
-        root.playlistHideProgress = visible ? 0 : 1
-    }
-
-    Behavior on playlistHideProgress {
-        NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
-    }
-
-    // ---------- 右上角菜单的三个动作 ----------
-    // 添加单曲：单选文件，规避多选场景的问题
-    function addSingleSong() {
-        addMusicDialogs.pickSingleFile()
-    }
-
-    // 单曲入库（由 AddMusicDialogs 的 filePicked 信号触发）
-    function handlePickedFile(fileUrl) {
-        // 选择器已限定音频类型，trusted 跳过后缀校验，兼容不带扩展名的 SAF 地址
-        var report = store.addFiles([fileUrl], true)
-        if (report.added > 0) {
-            if (typeof folderScanner !== "undefined")
-                folderScanner.keepPermission(fileUrl)
-            root.showToast("已添加 " + report.added + " 首")
-        } else if (report.duplicate > 0) {
-            root.showToast("这首歌曲已经在音乐库里了")
+    // ---------- 输出设备选择 ----------
+    function setOutputSheetVisible(visible) {
+        if (visible) {
+            root.refreshOutputDevices()
+            outputDeviceSheet.open()
         } else {
-            root.showToast("没有可添加的音频文件")
+            outputDeviceSheet.close()
         }
     }
 
-    // 扫描文件夹（由 AddMusicDialogs 的 folderPicked 信号触发）
-    // 扫描可能遍历大量文件，先让提示浮层画出来再干活
-    function handlePickedFolder(folderUrl) {
-        root.pendingScanFolder = folderUrl
-        root.showToast("正在扫描文件夹…")
-        scanDeferTimer.restart()
+    function refreshOutputDevices() {
+        root.outputDevices = engine.availableOutputDevices()
+        root.outputMode = engine.outputMode
     }
 
-    // 待扫描的文件夹路径，供 scanDeferTimer 消费
-    property string pendingScanFolder: ""
+    function deviceName(deviceId) {
+        for (var i = 0; i < root.outputDevices.length; ++i) {
+            var d = root.outputDevices[i]
+            if ("" + d.id === deviceId) return "" + (d.label || d.description)
+        }
+        return "指定设备"
+    }
 
-    Timer {
-        id: scanDeferTimer
-        interval: 60
-        onTriggered: {
-            var files = folderScanner.scanFolder(root.pendingScanFolder)
-            var report = store.addFiles(files, true)
-            if (report.added > 0)
-                root.showToast("已添加 " + report.added + " 首")
-            else if (files.length > 0)
-                root.showToast("文件夹里的歌曲都已在曲库中")
-            else
-                root.showToast("文件夹里没有找到音频文件")
+    // ---------- 播放列表面板 ----------
+    function setPlaylistVisible(visible) {
+        if (visible) {
+            playlistPanel.resetState()
+            playlistPanel.open()
+        } else {
+            playlistPanel.close()
         }
     }
+
+    // ---------- 菜单动作 ----------
+    function addSongs() {
+        addMusicDialogs.pickFiles()
+    }
+
+    // ---------- 系统「打开方式」进来的地址 ----------
+    Connections {
+        target: fileOpenRelay
+        function onFileOpenRequested(url) { root.openExternal(url) }
+    }
+
+    // ---------- 文件夹扫描结果 ----------
+    Connections {
+        target: root.fs
+        function onScanFinished(files) { Actions.handleScanFinished(root.ctx, files) }
+    }
+
     Component.onCompleted: {
+        // 先备好逻辑层上下文：下面的 store.load() 会触发 songsChanged
+        root.ctx = {
+            root: root,
+            store: store,
+            engine: engine,
+            lyrics: lyricLoader,
+            fs: root.fs
+        }
         root.playMode = appSettings.playMode
-        // 恢复上次的输出档位：Auto（默认）或用户手动指定的设备。
-        // 引擎拿到档位后会在自己的 onCompleted 里做首次选路
+        // 恢复上次的输出档位，引擎会在自己的 onCompleted 里做首次选路
         var savedOutput = appSettings.outputMode
         if (savedOutput && savedOutput !== "") {
             engine.outputMode = savedOutput
@@ -405,134 +188,73 @@ Window {
     onClosing: store.save()
 
     // ---------- 顶部栏 ----------
-    Item {
+    TopBar {
         id: topBar
         width: parent.width - 32
         height: 48
         anchors.top: parent.top
-        // 挖孔屏 / 状态栏区域需要避开，SafeArea 在桌面端为 0 不影响原布局
-        anchors.topMargin: 16 + root.SafeArea.margins.top
+        anchors.topMargin: 16 + root.SafeArea.margins.top   // 避开状态栏 / 挖孔
         anchors.left: parent.left
         anchors.leftMargin: 16
-        visible: !root.inLibraryMode
-
-        // 返回按钮与标题互斥显示，因此都靠左对齐
-        IconButton {
-            id: backButton
-            iconSource: root.iconBase + "chevron-down.svg"
-            iconColor: "#17181A"
-            iconSize: 22
-            implicitWidth: 40
-            implicitHeight: 40
-            tooltipText: "返回播放页"
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.inLyricsMode
-            rotation: 90
-            onClicked: root.inLyricsMode = false
-        }
-
-        Row {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 2
-            visible: !root.inLyricsMode
-
-            // 右上角菜单：添加单曲 / 扫描文件夹 / 关于
-            IconButton {
-                id: moreMenuButton
-                iconSource: root.iconBase + "more-vertical.svg"
-                iconColor: "#17181A"
-                iconSize: 20
-                implicitWidth: 40
-                implicitHeight: 40
-                tooltipText: "菜单"
-                onClicked: moreMenu.open()
-            }
-        }
+        iconBase: root.iconBase
+        showBack: root.inLyricsMode
+        onBackClicked: root.inLyricsMode = false
+        onMenuClicked: moreMenu.open()
     }
 
-    // ---------- 右上角下拉菜单 ----------
     MoreMenu {
         id: moreMenu
         iconBase: root.iconBase
-        // 锚定在菜单按钮下方、右对齐，不用底部停靠，避免弹层被顶到屏幕外
+        // 安卓隐藏「输出设备」：播放走原生、路由由系统管，且无公开 API 可指定设备
+        showOutputDevice: !engine.useNative
         anchorX: root.width - 12
         anchorY: topBar.y + topBar.height + 4
 
-        onAddSongRequested: root.addSingleSong()
+        onAddSongRequested: root.addSongs()
         onScanFolderRequested: addMusicDialogs.pickFolder()
         onOutputDeviceRequested: root.setOutputSheetVisible(true)
         onAboutRequested: aboutPopup.open()
     }
 
-    // ---------- 「关于」弹窗 ----------
     AboutDialog {
         id: aboutPopup
         anchors.centerIn: parent
     }
 
-    // ---------- 文件 / 文件夹选择 ----------
     AddMusicDialogs {
         id: addMusicDialogs
-        onFilePicked: function(fileUrl) { root.handlePickedFile(fileUrl) }
-        onFolderPicked: function(folderUrl) { root.handlePickedFolder(folderUrl) }
+        onFilesPicked: function(urls) { Actions.handlePickedFiles(root.ctx, urls) }
+        onFolderPicked: function(folderUrl) { Actions.handlePickedFolder(root.ctx, folderUrl) }
     }
 
-    // ---------- 输出设备选择面板（底部上滑） ----------
-    Item {
-        id: outputSheetLayer
-        anchors.fill: parent
-        // 收起后完全不参与命中测试，避免挡住下层交互
-        visible: root.outputSheetHideProgress < 1
-        z: 200
+    // ---------- 输出设备选择面板 ----------
+    OutputDeviceSheet {
+        id: outputDeviceSheet
+        width: root.width
+        safeViewHeight: root.safeViewHeight
+        listBottomMargin: root.SafeArea.margins.bottom
+        selectedId: root.outputMode
+        devices: root.outputDevices
 
-        // 半透明遮罩：点击关闭
-        Rectangle {
-            anchors.fill: parent
-            color: "#000000"
-            opacity: root.showOutputSheet ? 0.4 : 0
-            Behavior on opacity { NumberAnimation { duration: 220 } }
-
-            MouseArea {
-                anchors.fill: parent
-                onClicked: root.setOutputSheetVisible(false)
+        onDeviceSelected: function(deviceId, mode) {
+            root.setOutputSheetVisible(false)
+            root.outputMode = deviceId
+            appSettings.outputMode = deviceId
+            if (mode === "manual") {
+                engine.setOutputMode(deviceId)
+                root.showToast("已切换到 " + root.deviceName(deviceId))
+            } else {
+                engine.setOutputMode("auto")
+                root.showToast("输出设备：自动")
             }
-        }
-
-        OutputDeviceSheet {
-            id: outputDeviceSheet
-            width: parent.width
-            height: outputDeviceSheet.sheetHeight
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: -height * root.outputSheetHideProgress
-                                  - outputDeviceSheet.dragOffset * (1 - root.outputSheetHideProgress)
-            selectedId: root.showOutputSheet ? root.outputMode : outputDeviceSheet.selectedId
-            devices: root.outputDevices
-
-            onDeviceSelected: function(deviceId, mode) {
-                root.outputMode = deviceId
-                appSettings.outputMode = deviceId
-                if (mode === "manual") {
-                    appSettings.outputDeviceId = deviceId
-                    engine.setOutputMode(deviceId)
-                    root.showToast("已切换到 " + root.deviceName(deviceId))
-                } else {
-                    appSettings.outputDeviceId = ""
-                    engine.setOutputMode("auto")
-                    root.showToast("输出设备：自动")
-                }
-                root.setOutputSheetVisible(false)
-            }
-            onDismissed: root.setOutputSheetVisible(false)
         }
     }
 
-    // 引擎报告设备增减时刷新候选列表
     Connections {
         target: engine
         function onOutputDevicesChanged() {
-            if (root.showOutputSheet) root.refreshOutputDevices()
+            // 面板开着才刷新，以 Drawer 的真实状态为准，不另设镜像变量
+            if (outputDeviceSheet.opened) root.refreshOutputDevices()
         }
     }
 
@@ -544,9 +266,7 @@ Window {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.topMargin: 8
-        visible: !root.inLibraryMode
 
-        // 播放视图
         PlayerView {
             id: playerView
             anchors.fill: parent
@@ -566,56 +286,23 @@ Window {
                 if (root.currentSongIndex >= 0) store.toggleLiked(root.currentSongIndex)
             }
             onLyricClicked: root.inLyricsMode = true
-            onAddMusicRequested: root.inLibraryMode = true
+            onAddMusicRequested: root.addSongs()
         }
 
-        // 歌词视图
-        Item {
-            id: lyricsPageView
+        LyricsPage {
+            id: lyricsPage
             anchors.fill: parent
             opacity: root.inLyricsMode ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
-            Column {
-                id: lyricsSongInfo
-                width: parent.width - 32
-                // 顶部留出返回按钮（48 高 + 16 上边距）的空间
-                anchors.top: parent.top
-                anchors.topMargin: 76
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 2
+            title: root.currentTitle
+            subtitle: root.currentSubtitle
+            lyrics: root.displayLyrics
+            currentIndex: root.currentLyricIndex
 
-                Text {
-                    text: root.currentTitle
-                    color: "#17181A"
-                    font.pixelSize: 16
-                    font.bold: true
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-                Text {
-                    text: root.currentSubtitle
-                    color: "#8A8D92"
-                    font.pixelSize: 12
-                    anchors.horizontalCenter: parent.horizontalCenter
-                }
-            }
-
-            LyricsView {
-                id: fullLyricsView
-                anchors.top: lyricsSongInfo.bottom
-                anchors.bottom: parent.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.topMargin: 16
-                lyrics: root.displayLyrics
-                currentIndex: root.currentLyricIndex
-
-                onLineClicked: function(index) {
-                    if (!lyricLoader.loaded) return
-                    var line = root.displayLyrics[index]
-                    if (line && engine.durationMs > 0) engine.seekToMs(line.timeMs)
-                }
+            onSeekRequested: function(timeMs) {
+                if (lyricLoader.loaded && engine.durationMs > 0) engine.seekToMs(timeMs)
             }
         }
     }
@@ -626,13 +313,10 @@ Window {
         width: parent.width
         height: 112
         anchors.bottom: parent.bottom
-        // 避开底部手势导航条
-        anchors.bottomMargin: 14 + root.SafeArea.margins.bottom
-        visible: !root.inLibraryMode
+        anchors.bottomMargin: 14 + root.SafeArea.margins.bottom   // 避开手势条
 
         PlayerControls {
             id: controls
-            // 与唱机同理：限制最大宽度，最大化时保持居中的窄栏布局
             width: Math.min(parent.width, 372)
             x: (parent.width - width) / 2
             height: parent.height
@@ -641,10 +325,14 @@ Window {
             currentTime: root.currentTimeText
             totalTime: root.totalTimeText
             playMode: root.playMode
+            busy: root.scanning
+            statusText: root.scanStatusText
 
             onPlayToggled: root.togglePlay()
             onPreviousClicked: root.playPrev()
             onNextClicked: root.playNext(true)
+            // 曲库忙时点了切歌：按钮已置灰，给一句为什么，别让点击无声无息
+            onSwitchBlocked: root.showToast(root.scanStatusText)
             onSeekTo: function(value) {
                 if (engine.durationMs > 0) engine.seekToMs(Math.floor(value * engine.durationMs))
             }
@@ -652,72 +340,39 @@ Window {
                 root.playMode = (root.playMode + 1) % 3
                 appSettings.playMode = root.playMode
             }
-            onPlaylistToggled: root.setPlaylistVisible(!root.showPlaylist)
+            onPlaylistToggled: root.setPlaylistVisible(!playlistPanel.opened)
         }
     }
 
-    // ---------- 播放列表面板（底部上滑面板） ----------
+    // ---------- 播放列表面板（Drawer，兼音乐库管理） ----------
     PlaylistPanel {
         id: playlistPanel
-        // 停靠高度约为视口 55%：顶部边缘落在屏幕中线略上方
-        width: parent.width
-        height: Math.max(300, Math.round(parent.height * 0.55))
-        anchors.bottom: parent.bottom
-        // 停靠位 0；收起位 = 面板高度；下拉拖动量只在停靠态叠加，
-        // 收起时拖动量同步归零，面板从拖动态平滑滑到完全隐藏
-        anchors.bottomMargin: -playlistPanel.height * root.playlistHideProgress
-                              - playlistPanel.dragOffset * (1 - root.playlistHideProgress)
+        width: root.width
+        safeViewHeight: root.safeViewHeight
+        listBottomMargin: root.SafeArea.margins.bottom
         allSongs: store.model
         likedSongs: store.likedSongs
         currentFile: root.currentFile
-        z: 100
-
-        // 完全滑出窗口后停止构建内部列表
-        visible: anchors.bottomMargin > -playlistPanel.height
 
         onItemClicked: function(file, likedView) {
             root.playFromList(file, likedView)
             root.setPlaylistVisible(false)
         }
-        onManageRequested: {
+
+        // 删除语义随列表区分：全部 → 移出列表；喜欢 → 取消喜欢
+        onRemoveRequested: function(files, likedView) {
+            if (likedView) {
+                var unliked = store.unlikeFiles(files)
+                if (unliked > 0) root.showToast("已取消喜欢 " + unliked + " 首")
+            } else {
+                var removed = store.removeFiles(files)
+                if (removed > 0) root.showToast("已从列表移除 " + removed + " 首")
+            }
+        }
+
+        onAddMusicRequested: {
             root.setPlaylistVisible(false)
-            root.inLyricsMode = false
-            root.inLibraryMode = true
-        }
-        onCloseRequested: root.setPlaylistVisible(false)
-    }
-
-    // 播放列表遮罩
-    Rectangle {
-        id: overlay
-        anchors.fill: parent
-        color: "#000000"
-        opacity: root.showPlaylist ? 0.4 : 0
-        visible: opacity > 0
-        z: 99
-        Behavior on opacity { NumberAnimation { duration: 250 } }
-        MouseArea {
-            anchors.fill: parent
-            onClicked: root.setPlaylistVisible(false)
-        }
-    }
-
-    // ---------- 音乐库整页覆盖层 ----------
-    LibraryPage {
-        id: libraryPage
-        anchors.fill: parent
-        z: 300
-        store: store
-        currentIndex: root.currentSongIndex
-        opacity: root.inLibraryMode ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-
-        onCloseRequested: root.inLibraryMode = false
-        onPlayRequested: function(index) {
-            root.playQueue = store.allFiles()
-            root.selectSong(index, true)
-            root.inLibraryMode = false
+            root.addSongs()
         }
     }
 

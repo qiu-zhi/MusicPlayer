@@ -7,8 +7,8 @@ Item {
 
     property string iconSource: ""
     property string text: ""
-    property color iconColor: "#4A4E54"
-    property color textColor: "#17181A"
+    property color iconColor: Theme.inkSoft
+    property color textColor: Theme.ink
 
     implicitWidth: 152
     implicitHeight: 40
@@ -18,8 +18,8 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: 8
-        color: rowMouse.pressed ? "#14000000"
-             : rowMouse.containsMouse ? "#0A000000"
+        color: rowMouse.pressed ? Theme.alpha("#000000", 0.08)
+             : rowMouse.containsMouse ? Theme.alpha("#000000", 0.04)
              : "transparent"
         Behavior on color { ColorAnimation { duration: 100 } }
     }
