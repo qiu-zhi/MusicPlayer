@@ -9,7 +9,7 @@
 -->
 <Installer>
     <Name>Music Player</Name>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <Title>Music Player 安装向导</Title>
     <Publisher>quz</Publisher>
     <StartMenuDir>Music Player</StartMenuDir>
