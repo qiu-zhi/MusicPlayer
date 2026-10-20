@@ -23,13 +23,17 @@ find_package(Qt6 6.8 COMPONENTS
 
 qt_add_executable(MusicPlayer
     main.cpp
-    folderScanner.cpp
-    folderScanner.h
-    nativeaudioplayer.cpp
-    nativeaudioplayer.h
-    playlistfile.cpp
-    playlistfile.h
+    src/folderScanner.cpp
+    src/folderScanner.h
+    src/nativeaudioplayer.cpp
+    src/nativeaudioplayer.h
+    src/playlistfile.cpp
+    src/playlistfile.h
 )
+
+# src/ 下的头文件按「仓库根是包含路径」来引用（main.cpp 里写 "src/xxx.h"，
+# src/ 内部互相引用仍用 "xxx.h"）。这样源码放哪个目录都不影响彼此的相对引用。
+target_include_directories(MusicPlayer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ---------- 构建信息（「关于」弹窗展示）----------
 # 构建日期取 CMake 配置时刻：改 CMakeLists 或重新配置时会自动刷新，

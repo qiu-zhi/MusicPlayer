@@ -10,9 +10,9 @@
 #include <QtQuickControls2/QQuickStyle>
 #include <QUrl>
 
-#include "folderScanner.h"
-#include "nativeaudioplayer.h"
-#include "playlistfile.h"
+#include "src/folderScanner.h"
+#include "src/nativeaudioplayer.h"
+#include "src/playlistfile.h"
 
 // 接收系统「打开方式」传入的地址：
 // 安卓收到 VIEW intent 后会经 QDesktopServices::openUrl 按 scheme 分发处理器，
